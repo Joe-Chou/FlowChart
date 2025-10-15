@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>進階互動式流程圖</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 80vh;
+            border-radius: 1rem;
+            overflow: hidden; /* Important for keeping boxes inside */
+            border: 1px solid #d1d5db; /* gray-300 */
+        }
+        #canvas {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background-color: #f0f4f8; /* blue-gray-50 */
+            background-image:
+                linear-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .box {
+            position: absolute;
+            cursor: grab;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            border: 2px solid transparent;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            user-select: none;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            font-weight: 500;
+        }
+        .box.selected {
+            border-color: #3b82f6; /* blue-500 */
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+            z-index: 20;
+        }
+        .box:active {
+            cursor: grabbing;
+        }
+        .box-pharma { background-color: #e0f2fe; border-left: 5px solid #0ea5e9; }
+        .box-supply { background-color: #dcfce7; border-left: 5px solid #22c55e; }
+        .box-decision { background-color: #fef9c3; border-left: 5px solid #f59e0b; border-radius: 25px; }
+        .box-endpoint { background-color: #fee2e2; border-left: 5px solid #ef4444; }
+        .box-success { background-color: #dcfce7; border-left: 5px solid #16a34a; }
+        #svg-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .connector {
+            stroke: #6b7280; /* gray-500 */
+            stroke-width: 2.5;
+            fill: none;
+            pointer-events: all;
+            cursor: pointer;
+            stroke-linecap: round;
+        }
+        .connector.selected {
+            stroke: #3b82f6; /* blue-500 */
+            stroke-width: 4;
+        }
+        .box textarea {
+            width: 100%;
+            height: auto;
+            border: none;
+            background-color: transparent;
+            text-align: center;
+            resize: none;
+            outline: none;
+            font-weight: 500;
+            font-size: inherit;
+            font-family: inherit;
+            padding: 0;
+            margin: 0;
+            overflow: hidden;
+        }
+        #color-palette {
+            position: absolute;
+            display: flex;
+            gap: 0.5rem;
+            background-color: white;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 100;
+            transition: opacity 0.2s;
+        }
+        #color-palette.hidden {
+            display: none;
+            opacity: 0;
+        }
+        .color-swatch {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .color-swatch:hover {
+            transform: scale(1.15);
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 p-4 sm:p-6 lg:p-8">
+    <div class="max-w-7xl mx-auto">
+        <header class="text-center mb-6">
+            <h1 class="text-3xl md:text-4xl font-bold text-slate-900">進階互動式流程圖</h1>
+            <p class="mt-2 text-slate-600">按住左鍵拖曳方塊，點擊方塊連線，雙擊編輯，選取後按 <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg">Delete</kbd> 刪除</p>
+        </header>
+
+        <div class="flex justify-center items-center gap-4 mb-4 flex-wrap">
+            <button id="addBoxBtn" class="px-4 py-2 bg-indigo-500 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-600 transition">新增方塊</button>
+            <button id="saveBtn" class="px-4 py-2 bg-emerald-500 text-white font-semibold rounded-lg shadow-md hover:bg-emerald-600 transition">儲存檔案</button>
+            <button id="loadBtn" class="px-4 py-2 bg-slate-500 text-white font-semibold rounded-lg shadow-md hover:bg-slate-600 transition">讀取檔案</button>
+            <input type="file" id="fileInput" accept=".json" style="display: none;">
+        </div>
+
+        <div id="canvas-container">
+            <div id="canvas">
+                <svg id="svg-layer"></svg>
+                <div id="color-palette" class="hidden">
+                    <div class="color-swatch box-pharma" data-type="pharma" title="藥品步驟"></div>
+                    <div class="color-swatch box-supply" data-type="supply" title="衛材步驟"></div>
+                    <div class="color-swatch box-decision" data-type="decision" title="決策點"></div>
+                    <div class="color-swatch box-endpoint" data-type="endpoint" title="終止點"></div>
+                    <div class="color-swatch box-success" data-type="success" title="成功點"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const canvasContainer = document.getElementById('canvas-container');
+    const canvas = document.getElementById('canvas');
+    const svgLayer = document.getElementById('svg-layer');
+    const colorPalette = document.getElementById('color-palette');
+
+    const BOX_WIDTH = 180;
+    const BOX_HEIGHT = 80;
+
+    // --- 狀態管理 (State Management) ---
+    let boxes = [
+        // 藥品流程
+        { id: 1, x: 50, y: 50, w: BOX_WIDTH, h: BOX_HEIGHT, text: '藥品品項提議', type: 'pharma' },
+        { id: 2, x: 50, y: 180, w: BOX_WIDTH, h: BOX_HEIGHT, text: '醫師審核', type: 'decision' },
+        { id: 3, x: 50, y: 310, w: BOX_WIDTH, h: BOX_HEIGHT, text: '藥師評估', type: 'decision' },
+        { id: 4, x: 50, y: 440, w: BOX_WIDTH, h: BOX_HEIGHT, text: '特助 & 採購議價', type: 'pharma' },
+        { id: 5, x: 50, y: 570, w: BOX_WIDTH, h: BOX_HEIGHT, text: '院長簽核', type: 'decision' },
+        { id: 6, x: 50, y: 700, w: BOX_WIDTH, h: BOX_HEIGHT, text: '品項建碼', type: 'success' },
+        { id: 7, x: 280, y: 245, w: BOX_WIDTH, h: BOX_HEIGHT, text: '結案/退回', type: 'endpoint' },
+
+        // 衛材流程
+        { id: 8, x: 500, y: 50, w: BOX_WIDTH, h: BOX_HEIGHT, text: '衛材品項提議', type: 'supply' },
+        { id: 9, x: 500, y: 180, w: BOX_WIDTH, h: BOX_HEIGHT, text: '醫師 & 個管師評估', type: 'decision' },
+        { id: 10, x: 500, y: 310, w: BOX_WIDTH, h: BOX_HEIGHT, text: '特助 & 採購議價', type: 'supply' },
+        { id: 11, x: 500, y: 440, w: BOX_WIDTH, h: BOX_HEIGHT, text: '院長簽核', type: 'decision' },
+        { id: 12, x: 500, y: 570, w: BOX_WIDTH, h: BOX_HEIGHT, text: '品項建碼', type: 'success' },
+        { id: 13, x: 730, y: 245, w: BOX_WIDTH, h: BOX_HEIGHT, text: '結案/退回', type: 'endpoint' },
+    ];
+    let connections = [
+        { from: 1, to: 2 }, { from: 2, to: 3 }, { from: 3, to: 4 },
+        { from: 4, to: 5 }, { from: 5, to: 6 }, 
+        { from: 2, to: 7 }, { from: 3, to: 7 }, { from: 5, to: 7 },
+        { from: 8, to: 9 }, { from: 9, to: 10 }, { from: 10, to: 11 },
+        { from: 11, to: 12 }, { from: 9, to: 13 }, { from: 11, to: 13 }
+    ];
+    let nextBoxId = 14;
+    let selected = { type: null, id: null };
+    let dragState = { isDragging: false, target: null, offset: { x: 0, y: 0 } };
+
+    // --- 渲染與計算函式 (Render & Calculation Functions) ---
+    function render() {
+        canvas.querySelectorAll('.box').forEach(box => box.remove());
+        svgLayer.innerHTML = '';
+
+        connections.forEach(conn => {
+            const fromBox = boxes.find(b => b.id === conn.from);
+            const toBox = boxes.find(b => b.id === conn.to);
+            if (!fromBox || !toBox) return;
+
+            const pathData = calculatePath(fromBox, toBox);
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            line.setAttribute('d', pathData);
+            line.classList.add('connector');
+            
+            const isSelected = selected.type === 'connection' && selected.from === conn.from && selected.to === conn.to;
+            if (isSelected) line.classList.add('selected');
+            
+            line.addEventListener('click', (e) => {
+                e.stopPropagation();
+                select({ type: 'connection', from: conn.from, to: conn.to });
+            });
+            svgLayer.appendChild(line);
+        });
+
+        boxes.forEach(box => {
+            const boxEl = document.createElement('div');
+            boxEl.id = `box-${box.id}`;
+            boxEl.className = `box box-${box.type}`;
+            boxEl.style.left = `${box.x}px`;
+            boxEl.style.top = `${box.y}px`;
+            boxEl.style.width = `${box.w}px`;
+            boxEl.style.height = `${box.h}px`;
+            boxEl.textContent = box.text;
+
+            if (selected.type === 'box' && selected.id === box.id) {
+                boxEl.classList.add('selected');
+            }
+
+            boxEl.addEventListener('mousedown', onDragStart);
+            boxEl.addEventListener('click', onBoxClick);
+            boxEl.addEventListener('dblclick', onBoxDoubleClick);
+            
+            canvas.appendChild(boxEl);
+        });
+    }
+    
+    function getEdgeIntersectionPoint(box, targetCenter) {
+        const cx = box.x + box.w / 2;
+        const cy = box.y + box.h / 2;
+        const dx = targetCenter.x - cx;
+        const dy = targetCenter.y - cy;
+
+        if (dx === 0 && dy === 0) return { x: cx, y: cy };
+
+        const boxRatio = box.h / box.w;
+        const lineRatio = Math.abs(dy / dx);
+
+        let x, y;
+        if (lineRatio < boxRatio) {
+            x = dx > 0 ? box.x + box.w : box.x;
+            y = cy + (x - cx) * (dy / dx);
+        } else {
+            y = dy > 0 ? box.y + box.h : box.y;
+            x = cx + (y - cy) * (dx / dy);
+        }
+        return { x, y };
+    }
+    
+    function calculatePath(fromBox, toBox) {
+        const fromCenter = { x: fromBox.x + fromBox.w / 2, y: fromBox.y + fromBox.h / 2 };
+        const toCenter = { x: toBox.x + toBox.w / 2, y: toBox.y + toBox.h / 2 };
+
+        const startPoint = getEdgeIntersectionPoint(fromBox, toCenter);
+        const endPoint = getEdgeIntersectionPoint(toBox, fromCenter);
+        
+        return `M ${startPoint.x} ${startPoint.y} L ${endPoint.x} ${endPoint.y}`;
+    }
+
+    // --- 事件處理 (Event Handlers) ---
+    function onDragStart(e) {
+        if (e.target.tagName === 'TEXTAREA') return;
+        dragState.isDragging = true;
+        const id = parseInt(e.currentTarget.id.replace('box-', ''));
+        dragState.target = boxes.find(b => b.id === id);
+        
+        const canvasRect = canvas.getBoundingClientRect();
+        dragState.offset.x = e.clientX - canvasRect.left - dragState.target.x;
+        dragState.offset.y = e.clientY - canvasRect.top - dragState.target.y;
+        
+        e.currentTarget.style.zIndex = 100;
+        e.currentTarget.style.cursor = 'grabbing';
+    }
+
+    function onDrag(e) {
+        if (!dragState.isDragging || !dragState.target) return;
+        const canvasRect = canvas.getBoundingClientRect();
+        let newX = e.clientX - canvasRect.left - dragState.offset.x;
+        let newY = e.clientY - canvasRect.top - dragState.offset.y;
+
+        newX = Math.max(0, Math.min(newX, canvas.offsetWidth - dragState.target.w));
+        newY = Math.max(0, Math.min(newY, canvas.offsetHeight - dragState.target.h));
+
+        dragState.target.x = newX;
+        dragState.target.y = newY;
+        render();
+        updatePalettePosition();
+    }
+
+    function onDragEnd(e) {
+        if (dragState.isDragging && dragState.target) {
+            const boxEl = document.getElementById(`box-${dragState.target.id}`);
+            if (boxEl) {
+                boxEl.style.zIndex = 20;
+                boxEl.style.cursor = 'grab';
+            }
+        }
+        dragState.isDragging = false;
+        dragState.target = null;
+    }
+
+    function onBoxClick(e) {
+        if (e.detail > 1) return;
+        const id = parseInt(e.currentTarget.id.replace('box-', ''));
+        if (selected.type === 'box' && selected.id !== null && selected.id !== id) {
+            const existing = connections.find(c => (c.from === selected.id && c.to === id) || (c.from === id && c.to === selected.id));
+            if (!existing) connections.push({ from: selected.id, to: id });
+            select({type: null, id: null});
+        } else {
+            select({ type: 'box', id: id });
+        }
+    }
+
+    function onBoxDoubleClick(e) {
+        e.preventDefault();
+        const boxEl = e.currentTarget;
+        const id = parseInt(boxEl.id.replace('box-', ''));
+        const box = boxes.find(b => b.id === id);
+        
+        boxEl.textContent = '';
+        const textarea = document.createElement('textarea');
+        textarea.value = box.text;
+        textarea.style.height = 'auto';
+        
+        textarea.addEventListener('input', () => {
+             textarea.style.height = 'auto';
+             textarea.style.height = `${textarea.scrollHeight}px`;
+        });
+
+        textarea.addEventListener('blur', () => {
+            box.text = textarea.value.trim();
+            render();
+        });
+        textarea.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                textarea.blur();
+            }
+        });
+
+        boxEl.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+    
+    function select(item) {
+        selected = item;
+        render();
+        updatePalettePosition();
+    }
+    
+    function updatePalettePosition() {
+        if (selected.type === 'box' && selected.id !== null) {
+            const boxEl = document.getElementById(`box-${selected.id}`);
+            if (boxEl) {
+                const boxRect = boxEl.getBoundingClientRect();
+                const canvasRect = canvas.getBoundingClientRect();
+                colorPalette.style.top = `${boxEl.offsetTop - 50}px`;
+                colorPalette.style.left = `${boxEl.offsetLeft + boxEl.offsetWidth / 2 - colorPalette.offsetWidth / 2}px`;
+                colorPalette.classList.remove('hidden');
+            }
+        } else {
+            colorPalette.classList.add('hidden');
+        }
+    }
+
+    function deselect(e) {
+        if (e.target === canvas) {
+            select({type: null, id: null});
+        }
+    }
+
+    function handleDelete(e) {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (document.activeElement.tagName === 'TEXTAREA') return;
+            if (selected.type === 'box' && selected.id !== null) {
+                boxes = boxes.filter(b => b.id !== selected.id);
+                connections = connections.filter(c => c.from !== selected.id && c.to !== selected.id);
+                select({type: null, id: null});
+            } else if (selected.type === 'connection') {
+                connections = connections.filter(c => !(c.from === selected.from && c.to === selected.to));
+                select({type: null, id: null});
+            }
+        }
+    }
+    
+    function addBox() {
+        const newBox = {
+            id: nextBoxId++,
+            x: 20,
+            y: 20,
+            w: BOX_WIDTH,
+            h: BOX_HEIGHT,
+            text: '新步驟',
+            type: 'pharma' // Default type
+        };
+        boxes.push(newBox);
+        render();
+    }
+
+    function saveToFile() {
+        const data = {
+            boxes: boxes,
+            connections: connections,
+            nextBoxId: nextBoxId
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'flowchart-data.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function loadFromFile(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = JSON.parse(e.target.result);
+                if (data && Array.isArray(data.boxes) && Array.isArray(data.connections)) {
+                    boxes = data.boxes;
+                    connections = data.connections;
+                    nextBoxId = data.nextBoxId || Math.max(...boxes.map(b => b.id), 0) + 1;
+                    select({type: null, id: null}); // Deselect and render
+                } else {
+                    alert('檔案格式不正確！');
+                }
+            } catch (error) {
+                alert('讀取檔案時發生錯誤！');
+            }
+        };
+        reader.readAsText(file);
+    }
+    
+    // --- 初始化與事件綁定 (Initialization & Event Binding) ---
+    document.getElementById('addBoxBtn').addEventListener('click', addBox);
+    document.getElementById('saveBtn').addEventListener('click', saveToFile);
+    const loadBtn = document.getElementById('loadBtn');
+    const fileInput = document.getElementById('fileInput');
+    loadBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', loadFromFile);
+    
+    colorPalette.querySelectorAll('.color-swatch').forEach(swatch => {
+        swatch.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (selected.type === 'box' && selected.id !== null) {
+                const box = boxes.find(b => b.id === selected.id);
+                if (box) {
+                    box.type = e.target.dataset.type;
+                    render();
+                    updatePalettePosition(); // Re-center palette if box size changes
+                }
+            }
+        });
+    });
+
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', onDragEnd);
+    canvas.addEventListener('click', deselect);
+    window.addEventListener('keydown', handleDelete);
+
+    render();
+});
+</script>
+</body>
+</html>
+
